@@ -47,11 +47,11 @@
 // Macros to automate Push button object instatiation with interrupt service routine global function definition 
 // Interrupts needs a void function (not part of the class) to act as interrupt service routine that must be defined outside the class 
 // as a wrapper to member function to be called on button change state (from the interrupt)
-#define SET_PB(PBUTTON, PIN_BUT, FP_CALLB, FP_ISR, TYPE, POR, T_IGNORE) PBmonitor<TYPE> PBUTTON(PIN_BUT, FP_CALLB, PBUTTON##_ISR, POR, T_IGNORE); \
+#define SET_PB(PBUTTON, PIN_BUT, FP_CALLB, FP_ISR, TYPE, POR, T_IGNORE) PBmonitor PBUTTON(PIN_BUT, FP_CALLB, PBUTTON##_ISR, TYPE, POR, T_IGNORE); \
 void PBUTTON##_ISR() { PBUTTON.change(); }
-#define PUSH_BUTTON_L(PBUTTON, PIN_BUT, FP_CALLB, POR) PBmonitor<false> PBUTTON(PIN_BUT, FP_CALLB, PBUTTON##_ISR, POR); \
+#define PUSH_BUTTON_L(PBUTTON, PIN_BUT, FP_CALLB, POR) PBmonitor PBUTTON(PIN_BUT, FP_CALLB, PBUTTON##_ISR, LOW, POR); \
 void PBUTTON##_ISR() { PBUTTON.change(); }
-#define PUSH_BUTTON_H(PBUTTON, PIN_BUT, FP_CALLB, POR) PBmonitor<true> PBUTTON(PIN_BUT, FP_CALLB, PBUTTON##_ISR, POR); \
+#define PUSH_BUTTON_H(PBUTTON, PIN_BUT, FP_CALLB, POR) PBmonitor PBUTTON(PIN_BUT, FP_CALLB, PBUTTON##_ISR, HIGH, POR); \
 void PBUTTON##_ISR() { PBUTTON.change(); }
 
 typedef void (*ISR)(); // pointer to void function (to act as interrupt service routine)
@@ -61,29 +61,23 @@ typedef void (*PBcallback) (unsigned long); // pointer to void function taking o
 #define ONRELEASE false
 #define ONPRESS   true
 
-// .. note - using <type_traits> would be more elegant (shorter source) but ... it generates larger code
-template <bool ACTIVE = false>
-class PBmonitor { }; // the class represnting a push button to be monitored using interrupts
-
-// the class specialization for a active low push button (connects pinPB to GND)
-// since this (the way the button is connected) is not going to change in a sketch 
-template <>
-class PBmonitor<LOW> 
+class PBmonitor
 {
   public:
-    PBmonitor(uint8_t pinPBNo, PBcallback f, ISR isrv, bool actpr = ONRELEASE, unsigned long t_i = 20) : 
+    PBmonitor(uint8_t pinPBNo, PBcallback f, ISR isrv, bool act = LOW, bool fon = ONRELEASE, unsigned long t_i = 20) : 
       pinPB(pinPBNo), callback(f), isr(isrv), debounceDelay(t_i), elapsedMils(0) 
     { 
-      bp.actWhen = actpr;
+      bp.type = act;
+      bp.firesOn = fon;
       bp.inCallback = false;
-      bp.prevState = HIGH;
+      bp.prevState = !bp.type;
       bp.monitoring = false;
     }
     ~PBmonitor() { stopMonitoring(); }
     void startMonitoring() 
     { 
-      digitalWrite(pinPB, HIGH); 
-      pinMode(pinPB, INPUT_PULLUP); 
+      digitalWrite(pinPB, !bp.type); 
+      pinMode(pinPB, bp.type ? INPUT : INPUT_PULLUP); 
       bp.prevState = digitalRead(pinPB);
       elapsedMils=0;
       bp.monitoring=true;
@@ -108,109 +102,20 @@ class PBmonitor<LOW>
       interrupts();
       unsigned long now=millis();
       SREG = oldSREG;
-      bool state = digitalRead(pinPB);
+      bool currentState = digitalRead(pinPB);
       
-      // only this part actually differs in the specialization ...
-      if(bp.prevState == HIGH && state == LOW)
-      {
-          elapsedMils = now; // just store the time when pushed down
-          pushRegistered = bp.actWhen;
-      }
-      else if(bp.prevState == LOW && state == HIGH) // released - take action now
-          pushRegistered = !bp.actWhen;
-      // differ ends
-      
-      bp.prevState=state;
-      if(pushRegistered && (bp.actWhen || now - elapsedMils > debounceDelay) && !bp.inCallback) // was pressed long enought and not servicing previous press
-      {
-        bp.inCallback=true;
-        uint8_t oldSREG = SREG; // Save the status
-        interrupts();
-        callback(now - elapsedMils);
-        SREG = oldSREG;
-        bp.inCallback=false;
-      }
-    }
-
-    // if not used you can comment out this functions 
-    bool type() const { return LOW; }
-    bool isMonitoring() const { return bp.monitoring; } // is monitored = ISR installed
-    void setUBdelay(unsigned long t) { debounceDelay = t; }
-    unsigned long getUBdelay(void) const { return debounceDelay; }
-    bool isInCallback() const { return bp.inCallback; }
-    void setCallback(PBcallback f) { callback=f; }
-    PBcallback getCallback() const { return callback; }
-
-  private:
-    uint8_t pinPB; // pinPB at which change of level is monitored
-    PBcallback callback; // pointer to function to be called when button is pressed
-    ISR isr; // pointer to void f() function to serve as interrupt service routine - must be defined on a global scope
-    unsigned long elapsedMils; // elapsed millis since the last call to ISR
-    unsigned long debounceDelay; // time to be ignorred - changes that appear @ t < debounceDelay will be ignored
-    struct bitPack // saves space packing all bool data memebers in single bute
-    {
-      uint8_t actWhen:1; // when to react (call the callbak) on press (true) or on release (false)
-      uint8_t inCallback:1; // true while executing the callback function, will not re-enter the function from the same interrupt (isr disabled)
-      uint8_t prevState:1; // previous state of the pinPB (checked in the ISR)
-      uint8_t monitoring:1; // is active and monitoring the push button
-    } bp;
-};
-
-template <>
-class PBmonitor<HIGH> // the class specialization for a active high push button (connects pinPB to Vcc)
-{
-  public:
-    PBmonitor(uint8_t pinPBNo, PBcallback f, ISR isrv, bool actpr = ONRELEASE, unsigned long t_i = 20) : 
-      pinPB(pinPBNo), callback(f), isr(isrv), debounceDelay(t_i), elapsedMils(0)
-    { 
-      bp.actWhen = actpr;
-      bp.inCallback = false;
-      bp.prevState = HIGH;
-      bp.monitoring = false;
-    }
-    ~PBmonitor() { stopMonitoring(); }
-    void startMonitoring() 
-    { 
-      digitalWrite(pinPB, LOW); 
-      pinMode(pinPB, INPUT); // pulldown resistor needed
-      bp.prevState = digitalRead(pinPB);
-      elapsedMils=0;
-      bp.monitoring=true;
-      uint8_t oldSREG = SREG; // Save the status
-      noInterrupts();
-      // attachInterrupt(digitalPinToInterrupt(pinPB), isr, CHANGE); // set interrupt on change
-      enableInterrupt( pinPB, isr, CHANGE);
-      SREG = oldSREG;
-    }
-
-    void stopMonitoring() 
-    { 
-      // detachInterrupt(digitalPinToInterrupt(pinPB)); 
-      disableInterrupt(pinPB);
-      bp.monitoring=false; 
-    }
-
-    void change() 
-    { 
-      bool pushRegistered=false;
-      uint8_t oldSREG = SREG; // Save the status
-      interrupts();
-      unsigned long now=millis();
-      SREG = oldSREG;
-      bool state = digitalRead(pinPB);
-
-      // only this part actually differs in the specialization ...
-      if(bp.prevState == HIGH && state == LOW)
-        pushRegistered = !bp.actWhen;
-      else if(bp.prevState == LOW && state == HIGH) // released - take action now
+      if(bp.prevState == !bp.type && currentState == bp.type)
       {
         elapsedMils = now; // just store the time when pushed down
-        pushRegistered = bp.actWhen;
+        pushRegistered = bp.firesOn;
       }
-      // differ ends
-
-      bp.prevState=state;
-      if(pushRegistered && (bp.actWhen || now - elapsedMils > debounceDelay) && !bp.inCallback) // was pressed long enought and not servicing previous press
+      else if(bp.prevState == bp.type && currentState == !bp.type) // released 
+      {
+        pushRegistered = !bp.firesOn;
+      } //  else ... no change so do nothing
+      
+      bp.prevState=currentState;
+      if(pushRegistered && (bp.firesOn || now - elapsedMils > debounceDelay) && !bp.inCallback) // was pressed long enought and not servicing previous press
       {
         bp.inCallback=true;
         uint8_t oldSREG = SREG; // Save the status
@@ -221,14 +126,16 @@ class PBmonitor<HIGH> // the class specialization for a active high push button 
       }
     }
 
-    // if not used you can comment out tis functions 
-    bool type() const { return HIGH; }
+    // if not used this functions can be commented out to save space
+    bool type() const { return bp.type; }
     bool isMonitoring() const { return bp.monitoring; } // is monitored = ISR installed
     void setUBdelay(unsigned long t) { debounceDelay = t; }
     unsigned long getUBdelay(void) const { return debounceDelay; }
     bool isInCallback() const { return bp.inCallback; }
     void setCallback(PBcallback f) { callback=f; }
     PBcallback getCallback() const { return callback; }
+    bool getFiresOn() const { return bp.firesOn; }
+    void setFiresOn(bool fon) { bp.firesOn = fon; }
 
   protected:
     uint8_t pinPB; // pinPB at which change of level is monitored
@@ -238,12 +145,14 @@ class PBmonitor<HIGH> // the class specialization for a active high push button 
     unsigned long debounceDelay; // time to be ignorred - changes that appear @ t < debounceDelay will be ignored
     struct bitPack // saves space packing all bool data memebers in single bute
     {
-      uint8_t actWhen:1; // when to react (call the callbak) on press (true) or on release (false)
+      uint8_t type:1; // type of the button: active on high or active on low
+      uint8_t firesOn:1; // when to react (call the callbak) on press (true) or on release (false)
       uint8_t inCallback:1; // true while executing the callback function, will not re-enter the function from the same interrupt (isr disabled)
       uint8_t prevState:1; // previous state of the pinPB (checked in the ISR)
       uint8_t monitoring:1; // is active and monitoring the push button
     } bp;
 };
+
 
 #endif //idPushButton_H__
 

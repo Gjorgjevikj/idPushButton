@@ -26,6 +26,7 @@
 #define PB1 3
 #define PB2 2
 #define PB3 7
+#define PB4 A3
 
 // An example callback function to be called when button1 is pressed
 // Turns on and off one by one the two LEDs in sequence with 100ms delay
@@ -170,6 +171,9 @@ PUSH_BUTTON_H(button2, PB1, BlinkLeds, ONPRESS);
 //SET_PB(button2, PB1, BlinkLeds, MonitorChange2, HIGH, 100);
 
 PUSH_BUTTON_L(button3, PB3, FlashLeds2, ONPRESS);
+PUSH_BUTTON_H(button4, PB4, FlashLeds2, ONRELEASE);
+
+
 
 int cnt=0;
 
@@ -198,6 +202,7 @@ void setup() {
   button1.startMonitoring();
   button2.startMonitoring();
   button3.startMonitoring();
+  button4.startMonitoring();
  
   Serial.print("Button #1 @pin2");
   Serial.print(button1.type()?"(active HIGH)":"(active  LOW)");
